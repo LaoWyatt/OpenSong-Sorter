@@ -6,6 +6,7 @@ Created on Sat May  2 10:25:20 2026
 """
 
 import customtkinter
+import threading
 import xml.etree.ElementTree as ET
 import re
 import os
@@ -21,16 +22,41 @@ def tri_naturel(texte):
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', texte)]
 
 def extraire_meilleure_ligne(paroles):
+    """
+    1. Cherche dans les Refrains/Couplets.
+    2. Si rien n'est trouvé, prend la toute première ligne valide du texte.
+    """
+    if not paroles:
+        return "Sans_Titre"
+
+    # --- ÉTAPE 1 : Recherche par balises prioritaires ---
     priorites = ['[C]'] + [f'[C{i}]' for i in range(1, 10)] + ['[V]'] + [f'[V{i}]' for i in range(1, 10)]
+    
     for balise in priorites:
         balise_esc = re.escape(balise)
-        match = re.search(rf'{balise_esc}([\s\S]*?)(?=\[|$)', paroles, re.IGNORECASE)
+        match = re.search(rf'{balise_esc}\s*([\s\S]*?)(?=\[|$)', paroles, re.IGNORECASE)
         if match:
             for ligne in match.group(1).strip().split('\n'):
                 ligne = ligne.strip()
                 if not ligne or ligne.startswith('.'): continue
                 ligne_propre = " ".join(re.sub(r'^\d+', '', ligne).split())
                 if ligne_propre: return ligne_propre
+
+    # --- ÉTAPE 2 : FALLBACK (Si aucune balise n'a matché) ---
+    # On parcourt tout le texte ligne par ligne
+    for ligne in paroles.strip().split('\n'):
+        ligne = ligne.strip()
+        
+        # On ignore les lignes vides, les accords (.) et les balises oubliées ([)
+        if not ligne or ligne.startswith('.') or ligne.startswith('['):
+            continue
+            
+        # Nettoyage habituel (chiffres et espaces)
+        ligne_propre = " ".join(re.sub(r'^\d+', '', ligne).split())
+        
+        if ligne_propre:
+            return ligne_propre
+
     return "Sans_Titre"
 
 def traiter_fichier(chemin_src, nom_orig, dossier_dest, index_global):
@@ -42,99 +68,131 @@ def traiter_fichier(chemin_src, nom_orig, dossier_dest, index_global):
         lyrics_node = root.find('lyrics')
         paroles = lyrics_node.text if (lyrics_node is not None and lyrics_node.text) else ""
         
-        # LOGIQUE D'EXTRACTION POUR L'INDEX
-        if nom_sans_ext.isdigit():
-            numero = nom_sans_ext
-            titre_seul = extraire_meilleure_ligne(paroles)
-            nouveau_titre = f"{numero} {titre_seul}"
+        # Le "nouveau num" est toujours basé sur l'index global
+        # (Vous pouvez ajouter .zfill(3) si vous voulez 001, 002...)
+        numero = str(index_global) 
+
+        # LOGIQUE D'EXTRACTION POUR LE TITRE
+        # Cette Regex capture une référence (Num ou Ref avec des lettres et chiffres) au début
+        match = re.match(r'^([a-zA-Z]*\d+[a-zA-Z]*)\s*[-_]?\s*(.*)$', nom_sans_ext)
+        
+        if match:
+            ref_supprimee = match.group(1) # L'ancien num ou la ref (ex: 12, AF005)
+            reste = match.group(2).strip() # Le texte après la ref
             
-        elif match := re.match(r'^(\d+)\s*[-_]?\s*(.*)', nom_sans_ext):
-            numero = match.group(1)
-            titre_seul = match.group(2).strip()
-            if not titre_seul: titre_seul = extraire_meilleure_ligne(paroles)
-            nouveau_titre = nom_sans_ext
-            
+            if not reste:
+                # CAS : Num tout seul OU Ref tout seul -> On extrait des paroles
+                titre_seul = extraire_meilleure_ligne(paroles)
+            else:
+                # CAS : Num + Titre OU Ref + Titre -> On garde juste le Titre
+                titre_seul = reste
         else:
-            numero = str(index_global)
-            titre_seul = nom_sans_ext
-            nouveau_titre = f"{numero} {titre_seul}"
+            # CAS : Titre tout seul (Le nom ne commence pas par un chiffre ou une réf)
+            titre_seul = nom_sans_ext.strip()
+
+        # Format final : "Nouveau_Num Titre"
+        nouveau_titre = f"{numero} {titre_seul}"
 
         # Mise à jour de l'XML
         title_node = root.find('title')
-        if title_node is not None: title_node.text = nouveau_titre
-        else: ET.SubElement(root, 'title').text = nouveau_titre
+        if title_node is not None: 
+            title_node.text = nouveau_titre
+        else: 
+            ET.SubElement(root, 'title').text = nouveau_titre
 
+        # Nettoyage pour le nom du fichier (supprime les caractères interdits par Windows)
         nom_final = re.sub(r'[\\/*?:"<>|]', "", nouveau_titre)
         
-        if not os.path.exists(dossier_dest): os.makedirs(dossier_dest)
+        if not os.path.exists(dossier_dest): 
+            os.makedirs(dossier_dest)
+            
         tree.write(os.path.join(dossier_dest, nom_final), encoding="UTF-8", xml_declaration=True)
         
         # On retourne le nom final, le succès, et les données pour l'index
-        return nom_final, True, titre_seul, numero
+        return nom_final, True, titre_seul, numero, paroles
+        
     except Exception as e:
         return str(e), False, "", ""
 
 def generer_index_odt(liste_chansons, dossier_dest):
-    """Génère un index ODT groupé par lettre avec numéros alignés à droite."""
+    """Génère l'index puis les chants à la suite, séparés par 2 lignes."""
     if not liste_chansons:
         return
         
-    chemin_fichier = os.path.join(dossier_dest, "Index_Alphabétique.odt")
+    chemin_fichier = os.path.join(dossier_dest, "Carnet_de_Chants.odt")
     doc = OpenDocumentText()
 
-    # --- STYLE POUR LES LETTRES (A, B, C...) ---
-    style_lettre = Style(name="StyleLettre", family="paragraph")
-    style_lettre.addElement(TextProperties(fontsize="22pt", fontweight="bold"))
-    style_lettre.addElement(ParagraphProperties(margintop="0.5cm", marginbottom="0.2cm"))
-    doc.automaticstyles.addElement(style_lettre)
+    # --- 1. CONFIGURATION DES STYLES ---
+    
+    # Style pour le titre "INDEX" et les lettres A, B, C
+    style_titre_section = Style(name="StyleTitreSection", family="paragraph")
+    style_titre_section.addElement(TextProperties(fontsize="22pt", fontweight="bold"))
+    doc.automaticstyles.addElement(style_titre_section)
 
-    # --- STYLE POUR LES CHANTS ---
-    style_chant = Style(name="StyleChant", family="paragraph")
-    style_chant.addElement(TextProperties(fontsize="11pt", fontfamily="Arial"))
-    
-    # 1. Créer l'objet des propriétés de paragraphe
-    p_props = ParagraphProperties()
-    
-    # 2. Créer l'objet contenant les tabulations
+    # Style pour les lignes de l'index (Titre ........ Numéro)
+    style_index_ligne = Style(name="StyleIndexLigne", family="paragraph")
+    p_props_idx = ParagraphProperties()
     tabs = TabStops()
-    # On définit la butée à 15cm, alignée à droite, avec des points
     tabs.addElement(TabStop(type="right", position="15cm", leaderstyle="dotted"))
-    
-    # 3. IMBRICATION CORRECTE :
-    # On ajoute les TabStops DANS les ParagraphProperties
-    p_props.addElement(tabs)
-    # On ajoute les ParagraphProperties DANS le Style
-    style_chant.addElement(p_props)
-    
-    doc.automaticstyles.addElement(style_chant)
+    p_props_idx.addElement(tabs)
+    style_index_ligne.addElement(p_props_idx)
+    doc.automaticstyles.addElement(style_index_ligne)
 
-    # Tri alphabétique
+    # Style pour le premier chant (pour forcer le saut de page après l'index)
+    style_premier_chant = Style(name="StylePremierChant", family="paragraph")
+    style_premier_chant.addElement(TextProperties(fontsize="20pt", fontweight="bold"))
+    style_premier_chant.addElement(ParagraphProperties(breakbefore="page", margintop="1cm"))
+    doc.automaticstyles.addElement(style_premier_chant)
+
+    # Style pour les titres des chants suivants (sans saut de page)
+    style_titre_chant = Style(name="StyleTitreChant", family="paragraph")
+    style_titre_chant.addElement(TextProperties(fontsize="20pt", fontweight="bold"))
+    style_titre_chant.addElement(ParagraphProperties(margintop="1cm"))
+    doc.automaticstyles.addElement(style_titre_chant)
+
+    # Style pour les paroles
+    style_paroles = Style(name="StyleParoles", family="paragraph")
+    style_paroles.addElement(TextProperties(fontsize="11pt", fontfamily="Arial"))
+    doc.automaticstyles.addElement(style_paroles)
+
+    # --- 2. PARTIE INDEX (Tri Alphabétique) ---
     liste_chansons.sort(key=lambda x: x[0].lower())
-
+    
+    doc.text.addElement(P(text="INDEX", stylename=style_titre_section))
+    
     current_letter = ""
-    for titre, num in liste_chansons:
-        titre = titre.strip()
-        if not titre: continue
-        
+    for titre, num, paroles in liste_chansons:
         premiere_lettre = titre[0].upper()
-        
         if premiere_lettre != current_letter:
             current_letter = premiere_lettre
-            doc.text.addElement(P(text=current_letter, stylename=style_lettre))
+            doc.text.addElement(P(text=current_letter, stylename=style_titre_section))
+        
+        p = P(stylename=style_index_ligne)
+        p.addText(titre)
+        p.addElement(Tab())
+        p.addText(str(num))
+        doc.text.addElement(p)
 
-        # --- MODIFICATION ICI ---
-        p_chant = P(stylename=style_chant)
+    # --- 3. PARTIE CHANTS (Tri Numérique) ---
+    liste_chansons.sort(key=lambda x: tri_naturel(str(x[1])))
+
+    for i, (titre, num, paroles) in enumerate(liste_chansons):
+        # Pour le tout premier chant du carnet, on utilise le style avec saut de page
+        style_titre = style_premier_chant if i == 0 else style_titre_chant
         
-        # 1. On ajoute le texte du titre
-        p_chant.addText(titre)
+        # Titre du chant
+        doc.text.addElement(P(text=f"{num} - {titre}", stylename=style_titre))
         
-        # 2. On ajoute l'élément TabULATION (c'est lui qui déclenche les points)
-        p_chant.addElement(Tab())
+        # Paroles
+        if paroles:
+            for ligne in paroles.split('\n'):
+                ligne = ligne.strip()
+                if ligne.startswith('.'): continue # Ignore les accords
+                doc.text.addElement(P(text=ligne, stylename=style_paroles))
         
-        # 3. On ajoute le numéro
-        p_chant.addText(str(num))
-        
-        doc.text.addElement(p_chant)
+        # Séparation : on ajoute 2 lignes vides après chaque chant
+        doc.text.addElement(P(stylename=style_paroles))
+        doc.text.addElement(P(stylename=style_paroles))
 
     doc.save(chemin_fichier)
 
@@ -192,31 +250,73 @@ class MyFrame(customtkinter.CTkFrame):
         self.button_rename = customtkinter.CTkButton(self, text="Rename", command=self.button_rename_event, fg_color="green", hover_color="darkgreen")
         self.button_rename.grid(row=3, column=1, padx=10, pady=(10, 0), sticky="ew")
         
+        # --- NOUVEAU : LA BARRE DE PROGRESSION ---
+        self.progressbar = customtkinter.CTkProgressBar(self)
+        self.progressbar.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
+        self.progressbar.set(0) # On l'initialise à 0%
+        
     def button_search_event(self):
         dossier = self.source.get()
         self.frame_found.clear_elements()
+        self.progressbar.set(0)
         
         if os.path.exists(dossier):
-            fichiers_trouves = []
-            for root, dirs, files in os.walk(dossier):
-                for f in files:
-                    fichiers_trouves.append(f)
+            # On désactive le bouton pour éviter les clics multiples
+            self.button_search.configure(state="disabled", text="Searching...")
             
-            fichiers_trouves.sort(key=tri_naturel)
-            for f in fichiers_trouves:
-                self.frame_found.add_element(f)
-                
-            self.frame_found.title_label.configure(text=f"{len(fichiers_trouves)} Fichiers trouvés")
+            # Lancement du thread avec ta logique exacte
+            thread = threading.Thread(target=self.search_worker, args=(dossier,), daemon=True)
+            thread.start()
         else:
             self.frame_found.add_element("❌ Dossier introuvable", text_color="red")
+
+    def search_worker(self, dossier):
+        fichiers_trouves = []
+        count = 0
+
+        # --- RECHERCHE ET MISE À JOUR UI SIMULTANÉE ---
+        for root, dirs, files in os.walk(dossier):
+            # On trie les fichiers par dossier pour un affichage plus cohérent
+            files.sort(key=tri_naturel) 
+            
+            for f in files:
+                fichiers_trouves.append(f)
+                count += 1
+                
+                # On envoie le fichier à l'interface immédiatement
+                # Utiliser une capture de variable (f=f) pour éviter les erreurs de thread
+                self.after(0, lambda nom=f: self.frame_found.add_element(nom))
+        
+        # Une fois le scan terminé, on met à jour le titre final et le bouton
+        def finaliser_ui():
+            self.frame_found.title_label.configure(text=f"{count} Fichiers trouvés")
+            self.button_search.configure(state="normal", text="Search")
+
+        self.after(0, finaliser_ui)
         
     def button_rename_event(self):
+        """Cette fonction est appelée par le bouton. Elle lance le thread."""
+        # On désactive le bouton pour éviter de cliquer 10 fois pendant le traitement
+        self.button_rename.configure(state="disabled", text="Running...")
+        self.progressbar.set(0)
+        
+        # On crée un "fil" (thread) qui va exécuter la fonction de traitement
+        thread = threading.Thread(target=self.rename_worker)
+        
+        # On lance le thread en arrière-plan
+        thread.start()
+
+    def rename_worker(self):
+        """C'est ici que le vrai travail se fait, sans bloquer l'interface."""
         dossier_src = self.source.get()
         dossier_dest = self.destination.get()
-        self.result_frame.clear_elements()
+        
+        # On utilise 'after' pour interagir avec l'UI en toute sécurité
+        self.after(0, self.result_frame.clear_elements)
         
         if not os.path.exists(dossier_src) or dossier_dest == "":
-            self.result_frame.add_element("❌ Veuillez remplir les deux dossiers valides.", text_color="red")
+            self.after(0, lambda: self.result_frame.add_element("❌ Erreur : Dossiers invalides", "red"))
+            self.after(0, lambda: self.button_rename.configure(state="normal", text="Rename"))
             return
 
         fichiers_bruts = []
@@ -226,26 +326,34 @@ class MyFrame(customtkinter.CTkFrame):
         
         fichiers_bruts.sort(key=lambda x: tri_naturel(x[1]))
         
-        # Liste pour stocker les tuples (Titre, Numero) pour l'index
         donnees_index = []
         count = 0
+        size = len(fichiers_bruts)
         
         for i, (chemin, nom) in enumerate(fichiers_bruts, start=1):
-            resultat, succes, titre_seul, numero = traiter_fichier(chemin, nom, dossier_dest, i)
+            resultat, succes, titre_seul, numero, paroles = traiter_fichier(chemin, nom, dossier_dest, i)
+            
+            # On met à jour l'interface au fur et à mesure
             if succes:
-                self.result_frame.add_element(f"✅ {nom} ➔ {resultat}", text_color="lightgreen")
-                # On ajoute à notre liste pour le document .odt
-                donnees_index.append((titre_seul, numero))
+                donnees_index.append((titre_seul, numero, paroles))
                 count += 1
+                msg = f"✅ {nom} ➔ {resultat}"
+                self.after(0, lambda m=msg: self.result_frame.add_element(m, "lightgreen"))
             else:
-                self.result_frame.add_element(f"⚠️ Ignoré: {nom}", text_color="orange")
+                msg = f"⚠️ Ignoré: {nom}"
+                self.after(0, lambda m=msg: self.result_frame.add_element(m, "orange"))
                 
-        # --- GÉNÉRATION DE L'ODT ICI ---
+            progress = (count / size)
+            self.after(0, lambda m=msg: self.progressbar.set(progress))
+
+        # Génération de l'ODT
         if donnees_index:
             generer_index_odt(donnees_index, dossier_dest)
-            self.result_frame.add_element("📝 Index_Alphabétique.odt généré avec succès !", text_color="cyan")
-                
-        self.result_frame.title_label.configure(text=f"Résultats ({count} traités)")
+            self.after(0, lambda: self.result_frame.add_element("📝 Index_Alphabétique.odt généré !", "cyan"))
+
+        # Une fois fini, on réactive le bouton
+        self.after(0, lambda: self.result_frame.title_label.configure(text=f"Résultats ({count} traités)"))
+        self.after(0, lambda: self.button_rename.configure(state="normal", text="Rename"))
 
 
 class App(customtkinter.CTk):
