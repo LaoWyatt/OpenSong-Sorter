@@ -22,40 +22,33 @@ def tri_naturel(texte):
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', texte)]
 
 def extraire_meilleure_ligne(paroles):
-    """
-    1. Cherche dans les Refrains/Couplets.
-    2. Si rien n'est trouvé, prend la toute première ligne valide du texte.
-    """
-    if not paroles:
-        return "Sans_Titre"
+    if not paroles: return "Sans_Titre"
 
-    # --- ÉTAPE 1 : Recherche par balises prioritaires ---
     priorites = ['[C]'] + [f'[C{i}]' for i in range(1, 10)] + ['[V]'] + [f'[V{i}]' for i in range(1, 10)]
     
+    # On cherche dans les blocs, puis en fallback
+    def nettoyer_ligne(l):
+        l = l.strip()
+        if not l or l.startswith('.'): return None
+        # Enlever les chiffres au début
+        l = re.sub(r'^\d+', '', l).strip()
+        # Enlever la ponctuation parasite au début (mais garder les lettres/chiffres)
+        l = re.sub(r'^[!+?\'",;.:\s\-]+', '', l).strip()
+        return " ".join(l.split()) if l else None
+
+    # Étape 1 : Balises
     for balise in priorites:
-        balise_esc = re.escape(balise)
-        match = re.search(rf'{balise_esc}\s*([\s\S]*?)(?=\[|$)', paroles, re.IGNORECASE)
+        match = re.search(rf'{re.escape(balise)}\s*([\s\S]*?)(?=\[|$)', paroles, re.IGNORECASE)
         if match:
             for ligne in match.group(1).strip().split('\n'):
-                ligne = ligne.strip()
-                if not ligne or ligne.startswith('.'): continue
-                ligne_propre = " ".join(re.sub(r'^\d+', '', ligne).split())
-                if ligne_propre: return ligne_propre
+                lp = nettoyer_ligne(ligne)
+                if lp: return lp
 
-    # --- ÉTAPE 2 : FALLBACK (Si aucune balise n'a matché) ---
-    # On parcourt tout le texte ligne par ligne
+    # Étape 2 : Fallback intégral
     for ligne in paroles.strip().split('\n'):
-        ligne = ligne.strip()
-        
-        # On ignore les lignes vides, les accords (.) et les balises oubliées ([)
-        if not ligne or ligne.startswith('.') or ligne.startswith('['):
-            continue
-            
-        # Nettoyage habituel (chiffres et espaces)
-        ligne_propre = " ".join(re.sub(r'^\d+', '', ligne).split())
-        
-        if ligne_propre:
-            return ligne_propre
+        if ligne.strip().startswith('['): continue
+        lp = nettoyer_ligne(ligne)
+        if lp: return lp
 
     return "Sans_Titre"
 
@@ -65,54 +58,47 @@ def traiter_fichier(chemin_src, nom_orig, dossier_dest, index_global):
         root = tree.getroot()
         
         nom_sans_ext = os.path.splitext(nom_orig)[0]
+        
+        # --- NETTOYAGE PRÉALABLE DU NOM ---
+        # 1. Supprimer les "(Bis)", "(bis)", "+Bis", etc.
+        nom_sans_ext = re.sub(r'\(?\+?bis\)?', '', nom_sans_ext, flags=re.IGNORECASE).strip()
+        # 2. Supprimer la ponctuation bizarre au tout début (ex: ! ou ')
+        nom_sans_ext = re.sub(r'^[!+?\'",;.:\s\-]+', '', nom_sans_ext).strip()
+
         lyrics_node = root.find('lyrics')
         paroles = lyrics_node.text if (lyrics_node is not None and lyrics_node.text) else ""
-        
-        # Le "nouveau num" est toujours basé sur l'index global
-        # (Vous pouvez ajouter .zfill(3) si vous voulez 001, 002...)
         numero = str(index_global) 
 
-        # LOGIQUE D'EXTRACTION POUR LE TITRE
-        # Cette Regex capture une référence (Num ou Ref avec des lettres et chiffres) au début
+        # Logique d'extraction (Regex)
         match = re.match(r'^([a-zA-Z]*\d+[a-zA-Z]*)\s*[-_]?\s*(.*)$', nom_sans_ext)
         
         if match:
-            ref_supprimee = match.group(1) # L'ancien num ou la ref (ex: 12, AF005)
-            reste = match.group(2).strip() # Le texte après la ref
-            
+            reste = match.group(2).strip()
             if not reste:
-                # CAS : Num tout seul OU Ref tout seul -> On extrait des paroles
                 titre_seul = extraire_meilleure_ligne(paroles)
             else:
-                # CAS : Num + Titre OU Ref + Titre -> On garde juste le Titre
                 titre_seul = reste
         else:
-            # CAS : Titre tout seul (Le nom ne commence pas par un chiffre ou une réf)
             titre_seul = nom_sans_ext.strip()
 
-        # Format final : "Nouveau_Num Titre"
+        # Un dernier coup de propre sur le titre extrait
+        titre_seul = re.sub(r'^[!+?\'",;.:\s\-]+', '', titre_seul).strip()
         nouveau_titre = f"{numero} {titre_seul}"
 
-        # Mise à jour de l'XML
+        # Mise à jour XML
         title_node = root.find('title')
-        if title_node is not None: 
-            title_node.text = nouveau_titre
-        else: 
-            ET.SubElement(root, 'title').text = nouveau_titre
+        if title_node is not None: title_node.text = nouveau_titre
+        else: ET.SubElement(root, 'title').text = nouveau_titre
 
-        # Nettoyage pour le nom du fichier (supprime les caractères interdits par Windows)
+        # Sauvegarde
         nom_final = re.sub(r'[\\/*?:"<>|]', "", nouveau_titre)
-        
-        if not os.path.exists(dossier_dest): 
-            os.makedirs(dossier_dest)
-            
+        if not os.path.exists(dossier_dest): os.makedirs(dossier_dest)
         tree.write(os.path.join(dossier_dest, nom_final), encoding="UTF-8", xml_declaration=True)
         
-        # On retourne le nom final, le succès, et les données pour l'index
         return nom_final, True, titre_seul, numero, paroles
         
     except Exception as e:
-        return str(e), False, "", ""
+        return str(e), False, "", "", ""
 
 def generer_index_odt(liste_chansons, dossier_dest):
     """Génère l'index puis les chants à la suite, séparés par 2 lignes."""
@@ -360,7 +346,7 @@ class App(customtkinter.CTk):
     def __init__(self):
         super().__init__()
 
-        self.title("XML Renamer Pro")
+        self.title("OpenSong sorter by LAO Wyatt")
         self.geometry("1000x600")
         
         self.grid_columnconfigure((0, 1), weight=1)
