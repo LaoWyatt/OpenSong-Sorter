@@ -14,6 +14,9 @@ from odf.opendocument import OpenDocumentText
 from odf.text import P, Tab
 from odf.style import Style, TextProperties, ParagraphProperties, TabStop, TabStops
 
+titre_for_num = 1
+
+
 # ==========================================
 # 1. LOGIQUE DE TRAITEMENT XML & ODT
 # ==========================================
@@ -107,6 +110,7 @@ def traiter_fichier_complet(chemin_src, nom_orig, dossier_dest, index_global):
     
 def traiter_fichier_index_seulement(chemin_src, nom_orig, dossier_dest, index_global):
     try:
+        global titre_for_num
         tree = ET.parse(chemin_src)
         root = tree.getroot()
         
@@ -139,8 +143,12 @@ def traiter_fichier_index_seulement(chemin_src, nom_orig, dossier_dest, index_gl
         # CAS 2 : NUMÉRO SEUL (ex: "123") -> On cherche le titre dans les paroles
         elif re.match(r'^\d+$', nom_sans_ext):
             numero = nom_sans_ext
-            titre_seul = extraire_meilleure_ligne(paroles)
-            nouveau_titre = f"{numero} {titre_seul}"
+            if (titre_for_num):
+                titre_seul = extraire_meilleure_ligne(paroles)
+                nouveau_titre = f"{numero} {titre_seul}"
+            else:
+                titre_seul = "1-Sans_titre"
+                nouveau_titre = f"{numero}"
 
         # CAS 3 : NUMÉRO + TITRE DÉJÀ PROPRE (ex: "123 Mon Titre") -> LAISSER TEL QUEL
         elif re.match(r'^\d+[\s\-_].+', nom_sans_ext):
@@ -171,8 +179,7 @@ def traiter_fichier_index_seulement(chemin_src, nom_orig, dossier_dest, index_gl
         # Recalcul du titre final si nécessaire (si le nettoyage a vidé le titre)
         if not titre_seul:
             titre_seul = extraire_meilleure_ligne(paroles)
-        
-        nouveau_titre = f"{numero} {titre_seul}"
+            nouveau_titre = f"{numero} {titre_seul}"
         
         # Mise à jour du nœud <title> dans le XML
         title_node = root.find('title')
@@ -307,6 +314,7 @@ class MyScrollableFrame(customtkinter.CTkScrollableFrame):
 
 
 class MyFrame(customtkinter.CTkFrame):
+    
     def __init__(self, master, title, result_frame):
         super().__init__(master)
         self.grid_columnconfigure(0, weight=1)
@@ -334,12 +342,26 @@ class MyFrame(customtkinter.CTkFrame):
         
         # --- NOUVEAU : LA BARRE DE PROGRESSION ---
         self.progressbar = customtkinter.CTkProgressBar(self)
-        self.progressbar.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
+        self.progressbar.grid(row=4, column=0, padx=10, pady=10, sticky="ew", columnspan=2)
         self.progressbar.set(0) # On l'initialise à 0%
         
-        self.switch_index_only = customtkinter.CTkSwitch(self, text="Index Only", fg_color="red", progress_color="green")
+        self.switch_index_only = customtkinter.CTkSwitch(self, text="Index Only", fg_color="red", progress_color="green", command=self.switch_verify)
         self.switch_index_only.deselect()
-        self.switch_index_only.grid(row=4, column=1, padx=10, pady=10, sticky="ew")
+        self.switch_index_only.grid(row=5, column=0, padx=10, pady=10, sticky="ew")
+        
+        self.checkbox_ajout_titre = customtkinter.CTkCheckBox(self, text="Add titles")
+        self.checkbox_ajout_titre.grid(row=5, column=1, padx=10, pady=10, sticky="ew")
+        self.switch_verify()
+        
+        
+    def switch_verify(self):
+        global titre_for_num
+        if (self.switch_index_only.get()):
+            self.checkbox_ajout_titre.configure(state="normal")
+        else:
+            self.checkbox_ajout_titre.deselect()
+            titre_for_num = 0
+            self.checkbox_ajout_titre.configure(state="disabled")
         
     
     def button_search_event(self):
@@ -386,6 +408,8 @@ class MyFrame(customtkinter.CTkFrame):
         # On désactive le bouton pour éviter de cliquer 10 fois pendant le traitement
         self.button_rename.configure(state="disabled", text="Running...")
         self.progressbar.set(0)
+        global titre_for_num
+        titre_for_num = self.checkbox_ajout_titre.get()
         
         # On crée un "fil" (thread) qui va exécuter la fonction de traitement
         thread = threading.Thread(target=self.rename_worker)

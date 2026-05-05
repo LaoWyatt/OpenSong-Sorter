@@ -1,27 +1,29 @@
 # 🎵 OpenSong Sorter & Songbook Generator
 
-**OpenSong Sorter** est un utilitaire desktop puissant conçu pour automatiser l'organisation des bibliothèques de chants au format XML **OpenSong**. Il nettoie les noms de fichiers, harmonise la numérotation et génère un carnet de chants complet au format `.odt` (LibreOffice/Word).
+**OpenSong Sorter** est un utilitaire desktop puissant conçu pour automatiser l'organisation, le nettoyage et l'exportation de bibliothèques de chants au format XML **OpenSong**. 
+
+L'outil permet de transformer une collection de fichiers XML souvent mal nommés en une bibliothèque ordonnée et de générer automatiquement un carnet de chants professionnel au format `.odt` (compatible LibreOffice et Microsoft Word).
 
 ---
 
 ## ✨ Fonctionnalités Clés
 
-### 📂 Traitement de Fichiers
-*   **Renommage Intelligent** : Analyse les noms de fichiers pour corriger la ponctuation, les espaces manquants et les anciennes références.
-*   **Logique "Collage"** : Détecte et répare automatiquement les numéros collés aux lettres (ex: `26bis` ➔ `26 bis`, `756Tu` ➔ `756 Tu`).
-*   **Nettoyage Regex** : Supprime les mentions parasites comme `(bis)`, `+Bis`, et la ponctuation orpheline en début de titre (`<`, `!`, `'`).
-*   **Fallback sur Paroles** : Si un titre est manquant, l'IA du script extrait le premier vers du refrain `[C]` ou du couplet `[V]`.
+### 📂 Traitement et Renommage Intelligent
+*   **Nettoyage Automatique** : Supprime les caractères parasites au début des titres (`!`, `'`, `?`, `<`) et les mentions répétitives comme `(bis)` ou `+Bis`.
+*   **Correction de la Numérotation** : Détecte et répare les numéros collés aux lettres (ex: `26bis` ➔ `26 bis`, `756Tu` ➔ `756 Tu`).
+*   **Extraction de Titre par IA (Fallback)** : Si un fichier n'a pas de titre ou seulement un numéro, le script analyse le XML pour extraire la première ligne du refrain `[C]` ou du couplet `[V]`.
+*   **Tri Naturel** : Classe les fichiers de manière humaine (1, 2, 10) plutôt que purement alphabétique (1, 10, 2).
 
 ### 📝 Génération de Carnet de Chants (ODT)
-*   **Index Automatique** : Crée un index alphabétique avec pagination (titre à gauche, numéros alignés à droite avec points de suite).
-*   **Mise en Page Pro** : Un chant par section, titres en gras (20pt), paroles en Arial (11pt).
-*   **Filtre d'Accords** : Supprime automatiquement les lignes d'accords (commençant par `.`) pour un rendu propre destiné aux chanteurs.
-*   **Sauts de Page** : Sépare intelligemment l'index de la partie chants.
+*   **Index Alphabétique** : Crée automatiquement un index avec des points de suite et une pagination alignée à droite.
+*   **Mise en Page Pro** : Applique des styles de texte optimisés (Titres en 20pt gras, Paroles en Arial 11pt).
+*   **Nettoyage des Accords** : Pour le carnet de chants, le script filtre les lignes d'accords (commençant par `.`) pour ne garder que le texte.
+*   **Sauts de Page** : L'index est automatiquement séparé de la partie chants par un saut de page.
 
-### 💻 Interface Graphique (GUI)
-*   **Asynchrone (Multithreading)** : L'interface ne gèle jamais, même pendant le traitement de centaines de fichiers.
-*   **Barre de Progression** : Suivi en temps réel de l'avancement du renommage.
-*   **Mode "Index Only"** : Option pour conserver la structure existante tout en générant uniquement le carnet de chants.
+### 💻 Interface Moderne (GUI)
+*   **Multi-threading** : Le traitement s'exécute en arrière-plan. L'interface reste fluide et ne "gèle" jamais.
+*   **Suivi en Temps Réel** : Une barre de progression et une console de résultats affichent l'état d'avancement de chaque fichier.
+*   **Mode "Index Only"** : Une option pour générer le carnet sans modifier vos numéros de fichiers originaux.
 
 ---
 
@@ -29,33 +31,35 @@
 
 ### Prérequis
 *   **Python 3.10+**
-*   **Bibliothèques nécessaires** :
+*   **Bibliothèques requises** :
     ```bash
     pip install customtkinter odfpy
     ```
 
-   ---
+---
 
 ## 📖 Guide d'Utilisation
 
-1.  **Dossier Source** : Indiquez le dossier contenant vos fichiers XML OpenSong originaux.
-2.  **Search** : Cliquez pour prévisualiser la liste des fichiers détectés.
-3.  **Dossier Destination** : Indiquez où enregistrer les nouveaux fichiers et le carnet ODT.
-4.  **Index Only (Option)** : Cochez cette case si vous ne voulez pas modifier vos numéros de chants actuels.
-5.  **Rename** : Lancez le processus. Une fois terminé, le fichier `Carnet_de_Chants.odt` sera disponible dans votre dossier de destination.
+1.  **Source** : Indiquez le dossier contenant vos fichiers OpenSong originaux.
+2.  **Search** : Cliquez pour prévisualiser la liste des fichiers.
+3.  **Destination** : Choisissez le dossier où seront créés les nouveaux fichiers et le carnet ODT.
+4.  **Options** : 
+    *   Cochez **Index Only** pour garder votre numérotation actuelle.
+    *   Cochez **Add Titles** si vous voulez que le script trouve un titre aux fichiers qui n'ont qu'un numéro.
+5.  **Rename** : Lancez l'automatisation. Le fichier `Carnet_de_Chants.odt` apparaîtra dans votre dossier de destination à la fin du processus.
 
 ---
 
-## 🔍 Logique de Tri & Renommage
+## 🔍 Logique de Renommage (Ordre de priorité)
 
-Le script suit cet ordre de priorité pour chaque fichier :
-1.  **Numéro collé** : `25er` ➔ `25 er` | `756Tu` ➔ `756 Tu`.
-2.  **Numéro seul** : `123` ➔ cherche le titre dans les paroles.
-3.  **Référence Recueil** : `AF123 Titre` ➔ `[NouveauNum] Titre`.
-4.  **Titre seul** : `Mon Chant` ➔ `[NouveauNum] Mon Chant`.
+Le script analyse le nom du fichier selon ces étapes :
+1.  **Cas "Collé"** : `25bis` ➔ `25 bis`.
+2.  **Cas "Numéro Seul"** : `123` ➔ Cherche le titre dans le texte du chant.
+3.  **Cas "Référence"** : `AF123 Mon Titre` ➔ `[NouveauNum] Mon Titre`.
+4.  **Cas "Titre Seul"** : `Mon Chant` ➔ `[NouveauNum] Mon Chant`.
 
 ---
 
-## ⚖️ Licence
-Réalisé par **Laowy (LAO Wyatt)** - 2026.
-Libre d'utilisation pour les églises et organisations utilisant OpenSong.
+## 👤 Auteur
+Développé par **Laowy (LAO Wyatt)** — 2026.  
+*Outil dédié à la simplification de la gestion liturgique et musicale.*
