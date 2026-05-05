@@ -21,6 +21,8 @@ from odf.style import Style, TextProperties, ParagraphProperties, TabStop, TabSt
 def tri_naturel(texte):
     return [int(c) if c.isdigit() else c.lower() for c in re.split(r'(\d+)', texte)]
 
+
+
 def extraire_meilleure_ligne(paroles):
     if not paroles: return "Sans_Titre"
 
@@ -52,7 +54,9 @@ def extraire_meilleure_ligne(paroles):
 
     return "Sans_Titre"
 
-def traiter_fichier(chemin_src, nom_orig, dossier_dest, index_global):
+
+
+def traiter_fichier_complet(chemin_src, nom_orig, dossier_dest, index_global):
     try:
         tree = ET.parse(chemin_src)
         root = tree.getroot()
@@ -99,6 +103,98 @@ def traiter_fichier(chemin_src, nom_orig, dossier_dest, index_global):
         
     except Exception as e:
         return str(e), False, "", "", ""
+    
+    
+def traiter_fichier_index_seulement(chemin_src, nom_orig, dossier_dest, index_global):
+    try:
+        tree = ET.parse(chemin_src)
+        root = tree.getroot()
+        
+        nom_sans_ext = os.path.splitext(nom_orig)[0]
+        
+        # --- 1. NETTOYAGE PRÉALABLE DU NOM ---
+        # Note : On ne supprime plus "bis" ici pour éviter de perdre l'info sur "26bis"
+        # On nettoie uniquement la ponctuation bizarre au début
+        nom_sans_ext = re.sub(r'^[!+?\'",;.:\s\-<]+', '', nom_sans_ext).strip()
+
+        lyrics_node = root.find('lyrics')
+        paroles = lyrics_node.text if (lyrics_node is not None and lyrics_node.text) else ""
+        
+        # Initialisation des variables
+        numero = str(index_global)
+        titre_seul = ""
+        nouveau_titre = ""
+
+        # --- 2. LOGIQUE CONDITIONNELLE (ORDRE DE PRIORITÉ) ---
+
+        # CAS 1 : NUMÉRO COLLÉ À DES LETTRES (ex: "26bis", "25er", "956b", "756Tu")
+        # On cherche des chiffres suivis immédiatement de lettres
+        match_colle = re.match(r'^(\d+)([a-zA-Z].*)$', nom_sans_ext)
+        
+        if match_colle:
+            numero = match_colle.group(1)
+            titre_seul = match_colle.group(2).strip()
+            nouveau_titre = f"{numero} {titre_seul}"
+
+        # CAS 2 : NUMÉRO SEUL (ex: "123") -> On cherche le titre dans les paroles
+        elif re.match(r'^\d+$', nom_sans_ext):
+            numero = nom_sans_ext
+            titre_seul = extraire_meilleure_ligne(paroles)
+            nouveau_titre = f"{numero} {titre_seul}"
+
+        # CAS 3 : NUMÉRO + TITRE DÉJÀ PROPRE (ex: "123 Mon Titre") -> LAISSER TEL QUEL
+        elif re.match(r'^\d+[\s\-_].+', nom_sans_ext):
+            match = re.match(r'^(\d+)[\s\-_]+(.*)$', nom_sans_ext)
+            numero = match.group(1)
+            titre_seul = match.group(2).strip()
+            nouveau_titre = nom_sans_ext 
+
+        # CAS 4 : RÉFÉRENCE + TITRE (ex: "AF123 Titre") -> NOUVEAU NUM + TITRE
+        elif re.match(r'^[a-zA-Z]+\d+[a-zA-Z]*[\s\-_].+', nom_sans_ext):
+            match = re.match(r'^[a-zA-Z]+\d+[a-zA-Z]*[\s\-_]+(.*)$', nom_sans_ext)
+            numero = str(index_global)
+            titre_seul = match.group(1).strip()
+            nouveau_titre = f"{numero} {titre_seul}"
+
+        # CAS 5 : TITRE SEUL (ou tout autre cas) -> NOUVEAU NUM + TITRE
+        else:
+            numero = str(index_global)
+            titre_seul = nom_sans_ext
+            nouveau_titre = f"{numero} {titre_seul}"
+
+        # --- 3. MISE À JOUR ET SAUVEGARDE ---
+        
+        # Nettoyage final du titre (on enlève les "bis" parasites restants et ponctuation)
+        titre_seul = re.sub(r'\(?\+?bis\)?', '', titre_seul, flags=re.IGNORECASE).strip()
+        titre_seul = re.sub(r'^[!+?\'",;.:\s\-<]+', '', titre_seul).strip()
+        
+        # Recalcul du titre final si nécessaire (si le nettoyage a vidé le titre)
+        if not titre_seul:
+            titre_seul = extraire_meilleure_ligne(paroles)
+        
+        nouveau_titre = f"{numero} {titre_seul}"
+        
+        # Mise à jour du nœud <title> dans le XML
+        title_node = root.find('title')
+        if title_node is not None: 
+            title_node.text = nouveau_titre
+        else: 
+            ET.SubElement(root, 'title').text = nouveau_titre
+
+        # Nettoyage pour le nom du fichier Windows
+        nom_final = re.sub(r'[\\/*?:"<>|]', "", nouveau_titre)
+        
+        if not os.path.exists(dossier_dest): 
+            os.makedirs(dossier_dest)
+            
+        tree.write(os.path.join(dossier_dest, nom_final), encoding="UTF-8", xml_declaration=True)
+        
+        return nom_final, True, titre_seul, numero, paroles
+        
+    except Exception as e:
+        return str(e), False, "", "", ""
+
+
 
 def generer_index_odt(liste_chansons, dossier_dest):
     """Génère l'index puis les chants à la suite, séparés par 2 lignes."""
@@ -241,6 +337,11 @@ class MyFrame(customtkinter.CTkFrame):
         self.progressbar.grid(row=4, column=0, padx=10, pady=10, sticky="ew")
         self.progressbar.set(0) # On l'initialise à 0%
         
+        self.switch_index_only = customtkinter.CTkSwitch(self, text="Index Only", fg_color="red", progress_color="green")
+        self.switch_index_only.deselect()
+        self.switch_index_only.grid(row=4, column=1, padx=10, pady=10, sticky="ew")
+        
+    
     def button_search_event(self):
         dossier = self.source.get()
         self.frame_found.clear_elements()
@@ -317,7 +418,10 @@ class MyFrame(customtkinter.CTkFrame):
         size = len(fichiers_bruts)
         
         for i, (chemin, nom) in enumerate(fichiers_bruts, start=1):
-            resultat, succes, titre_seul, numero, paroles = traiter_fichier(chemin, nom, dossier_dest, i)
+            if (self.switch_index_only.get()):
+                resultat, succes, titre_seul, numero, paroles = traiter_fichier_index_seulement(chemin, nom, dossier_dest, i)
+            else :
+                resultat, succes, titre_seul, numero, paroles = traiter_fichier_complet(chemin, nom, dossier_dest, i)
             
             # On met à jour l'interface au fur et à mesure
             if succes:
